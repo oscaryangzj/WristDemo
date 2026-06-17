@@ -1,0 +1,1 @@
+from model.palm_detection.palm_detection import PalmDetection
