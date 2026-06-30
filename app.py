@@ -8,6 +8,10 @@ from model import PalmDetection, HandLandmark
 from utils import CvFpsCalc
 from utils.utils import rotate_and_crop_rectangle
 
+from time import monotonic
+from wrist_flip_detector import WristFlipDetector
+
+
 HAND_CONNECTIONS = (
     (0, 1), (1, 2), (2, 3), (3, 4),
     (0, 5), (5, 6), (6, 7), (7, 8),
@@ -28,8 +32,20 @@ def get_args():
     parser.add_argument (
         '--providers',
         choices = ['default', 'cpu', 'coreml'],
-        default =' default',
+        default ='default',
         help = 'ONNX Runtime providers to use.',
+    )
+    parser.add_argument (
+        "--flip-threshold",
+        type = float,
+        default = 0.35,
+        help = "Minimum absolute orientation score for a stable hand side.",
+    )
+    parser.add_argument (
+        "--flip-stable-frames",
+        type = int,
+        default = 4,
+        help = "Consecutive frames needed before accepting a new hand side.",
     )
     return parser.parse_args ()
 
@@ -49,6 +65,29 @@ def build_providers (provider_mode):
             'CPUExecutionProvider',
         ]
     return None
+
+
+def draw_text (image, text, origin, scale, color):
+    cv.putText (
+        image,
+        text,
+        origin,
+        cv.FONT_HERSHEY_SIMPLEX,
+        scale,
+        (0, 0, 0),
+        3,
+        cv.LINE_AA,
+    )
+    cv.putText (
+        image,
+        text,
+        origin,
+        cv.FONT_HERSHEY_SIMPLEX,
+        scale,
+        color,
+        1,
+        cv.LINE_AA,
+    )
 
 
 def draw_palm_detections (image, hands):
@@ -155,9 +194,15 @@ def main () :
     if not cap.isOpened ():
         raise RuntimeError (f'Could not open camera device: {args.device}')
 
-    palm_detection, hand_landmark = create_models(args)
+    palm_detection, hand_landmark = create_models (args)
+    flip_detector = WristFlipDetector (
+        enter_threshold = args.flip_threshold,
+        stable_frames = args.flip_stable_frames,
+    )
     fps_calc = CvFpsCalc (buffer_len = 10)
-    window_name = 'Palm Detection Demo'
+    window_name = "Wrist Flip Detection Demo"
+    flip_banner_until = 0.0
+    flip_count = 0
 
     while True:
         fps = fps_calc.get ()
@@ -174,6 +219,7 @@ def main () :
         hands = palm_detection (image)
         rects = hands_to_rects (image, hands)
         debug_image = image.copy ()
+        tracked_landmarks = None
 
         if len (rects) > 0:
             hand_images = rotate_and_crop_rectangle (
@@ -182,29 +228,47 @@ def main () :
                 operation_when_cropping_out_of_range = 'padding',
             )
             landmarks, _ = hand_landmark (hand_images, rects)
+            if len(landmarks) > 0:
+                tracked_landmarks = landmarks[0]
             debug_image = draw_palm_detections (debug_image, hands)
             debug_image = draw_landmarks (debug_image, landmarks)
 
-        cv.putText (
-            debug_image,
-            f'FPS: {fps:.1f}  Palms: {len(hands)}  Providers: {palm_detection.providers}',
-            (10, 30),
-            cv.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (0, 0, 0),
-            3,
-            cv.LINE_AA,
+        now = monotonic()
+        flip_detected, wrist_state, orientation_score = flip_detector.update(
+            tracked_landmarks,
+            now,
         )
-        cv.putText (
-            debug_image,
-            f'FPS: {fps:.1f}  Palms: {len(hands)}  Providers: {palm_detection.providers}',
-            (10, 30),
-            cv.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (255, 255, 255),
-            1,
-            cv.LINE_AA,
+
+        if flip_detected:
+            flip_count += 1
+            flip_banner_until = now + 0.7
+
+        score_text = (
+            "None"
+            if orientation_score is None
+            else f"{orientation_score:+.2f}"
         )
+        info_text = (
+            f"FPS: {fps:.1f}  Hands: {len(rects)}  "
+            f"Providers: {palm_detection.providers}"
+        )
+        draw_text(debug_image, info_text, (10, 30), 0.65, (255, 255, 255))
+        draw_text(
+            debug_image,
+            f"Wrist: {wrist_state}  Score: {score_text}  Flips: {flip_count}",
+            (10, 60),
+            0.65,
+            (0, 255, 255),
+        )
+
+        if now < flip_banner_until:
+            draw_text(
+                debug_image,
+                "WRIST FLIP!",
+                (10, 105),
+                1.1,
+                (0, 0, 255),
+            )
 
         cv.imshow (window_name, debug_image)
 
@@ -214,7 +278,6 @@ def main () :
 
 if __name__ == '__main__':
     main()
-
 
 
 

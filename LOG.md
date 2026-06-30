@@ -41,6 +41,26 @@ resize and padding hands to (3, 224, 224)
 
 -> get the corresponding coordinations in the original image
 
+## Wrist Flip Detector
+
+### Version 1:
+
+**Only focus on the first hand**
+
+use three key points in hand landmark
+
+- landmark[0] : wrist
+- landmark[5] : index_mcp
+- landmark[17] : pinky_mcp
+
+get two vectors
+- wrist_to_index_mcp
+- pinky_to_index_mcp
+
+use the cross product to get the angle
+
+use sign change of the cross product to monitor the flip direction
+
 
 
 
